@@ -28,17 +28,12 @@ typedef struct _ambi {
 
 } elseAmbi;
 
-static void SetAzimuth(elseAmbi *x, t_floatarg f) {
-    x->Position.fAzimuth = f;
-    x->Encoder->SetPosition(x->Position);
-}
+static void SetAzimuth(elseAmbi *x, t_floatarg f) { x->Position.fAzimuth = f; }
 static void SetElevation(elseAmbi *x, t_floatarg f) {
     x->Position.fElevation = f;
-    x->Encoder->SetPosition(x->Position);
 }
 static void SetDistance(elseAmbi *x, t_floatarg f) {
     x->Position.fDistance = f;
-    x->Encoder->SetPosition(x->Position);
 }
 
 // ==============================================
@@ -54,6 +49,7 @@ static t_int *AmbiPerform(t_int *w) {
     int n = (int)(w[7]);
 
     unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
+    x->Encoder->SetPosition(x->Position);
 
     x->Encoder->Process(in, n, x->BFormat);
 
@@ -69,13 +65,13 @@ static t_int *AmbiPerform(t_int *w) {
     for (int i = 0; i < n; i++) {
         out1[i] = ppfSpeakerFeeds[0][i];
         out2[i] = ppfSpeakerFeeds[1][i];
-        // out3[i] = ppfSpeakerFeeds[2][i];
-        // out4[i] = ppfSpeakerFeeds[3][i];
+        out3[i] = ppfSpeakerFeeds[2][i];
+        out4[i] = ppfSpeakerFeeds[3][i];
     }
 
-    // for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++)
-    //     delete[] ppfSpeakerFeeds[niSpeaker];
-    // delete[] ppfSpeakerFeeds;
+    for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++)
+        delete[] ppfSpeakerFeeds[niSpeaker];
+    delete[] ppfSpeakerFeeds;
 
     return (w + 8);
 }
@@ -90,8 +86,11 @@ static void AmbiAddDsp(elseAmbi *x, t_signal **sp) {
     int unsigned blockSize = sp[0]->s_n;
     x->BFormat->Configure(1, true, blockSize);
     x->Encoder->Configure(1, true, 0); // nao sei oq é esse terceiro parametro
-    x->Decoder->Configure(1, true, blockSize, kAmblib_Cube, 2);
+    x->Decoder->Configure(1, true, blockSize, kAmblib_Cube,
+                          4); // 4 é o numero de canais
+    x->Encoder->SetPosition(x->Position);
 
+    // tem que variar dependendo do que o usuario vai querer
     dsp_add(AmbiPerform, 7, x, sp[0]->s_vec, sp[1]->s_vec, sp[2]->s_vec,
             sp[3]->s_vec, sp[4]->s_vec, (t_int)sp[0]->s_n);
 }
@@ -106,13 +105,8 @@ static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
     x->out4 = outlet_new(&x->xObj, &s_signal);
 
     // check how to define sample rate, needed?
-
     x->BFormat = new CBFormat();
-
     x->Encoder = new CAmbisonicEncoder();
-
-    // posição padrao
-
     x->Decoder = new CAmbisonicDecoder();
 
     return x;
