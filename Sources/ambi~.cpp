@@ -5,7 +5,7 @@
 
 // libspatialaudio
 #include <AmbisonicDecoder.h>
-#include <AmbisonicEncoder.h>
+#include <AmbisonicEncoderDist.h>
 #include <BFormat.h>
 
 static t_class *ambi;
@@ -24,8 +24,10 @@ typedef struct _ambi {
 
     PolarPoint Position;
     CBFormat *BFormat;
-    CAmbisonicEncoder *Encoder;
+    CAmbisonicEncoderDist *Encoder;
     CAmbisonicDecoder *Decoder;
+
+    float **ppfSpeakerFeeds;
 
     bool DecoderConfigured = false;
     bool Binaural = true;
@@ -120,23 +122,14 @@ static t_int *AmbiPerform(t_int *w) {
         x->Encoder->Process(in, n, x->BFormat);
     }
 
-    float **ppfSpeakerFeeds = new float *[DecoderSpeakers];
-    for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
-        ppfSpeakerFeeds[niSpeaker] = new float[n];
-    }
-    x->Decoder->Process(x->BFormat, n, ppfSpeakerFeeds);
+    x->Decoder->Process(x->BFormat, n, x->ppfSpeakerFeeds);
 
     for (int i = 0; i < x->nChOut; i++) {
         t_sample *out = (t_sample *)(w[outChIndex + i]);
         for (int j = 0; j < n; j++) {
-            out[j] = ppfSpeakerFeeds[i][j];
+            out[j] = x->ppfSpeakerFeeds[i][j];
         }
     }
-
-    for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
-        delete[] ppfSpeakerFeeds[niSpeaker];
-    }
-    delete[] ppfSpeakerFeeds;
 
     return w + DspArr;
 }
@@ -148,8 +141,14 @@ static void AmbiAddDsp(elseAmbi *x, t_signal **sp) {
 
     int unsigned blockSize = sp[0]->s_n;
     x->BFormat->Configure(1, true, blockSize);
-    x->Encoder->Configure(1, true, 0);
+    x->Encoder->Configure(1, true, sys_getsr());
     x->Decoder->Configure(1, true, blockSize, x->SpeakerSetUp, x->nChOut);
+
+    unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
+    x->ppfSpeakerFeeds = new float *[DecoderSpeakers];
+    for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
+        x->ppfSpeakerFeeds[niSpeaker] = new float[blockSize];
+    }
 
     t_int *SigVec = (t_int *)getbytes((ChCount + 2) * sizeof(t_int));
     SigVec[0] = (t_int)x;
@@ -232,7 +231,7 @@ static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
 
     // check how to define sample rate, needed?
     x->BFormat = new CBFormat();
-    x->Encoder = new CAmbisonicEncoder();
+    x->Encoder = new CAmbisonicEncoderDist();
     x->Decoder = new CAmbisonicDecoder();
 
     return x;
@@ -242,6 +241,14 @@ static void *FreeAmbi(elseAmbi *x) {
     delete x->BFormat;
     delete x->Encoder;
     delete x->Decoder;
+
+    unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
+
+    for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
+        delete[] x->ppfSpeakerFeeds[niSpeaker];
+    }
+    delete[] x->ppfSpeakerFeeds;
+
     free(x->outlets);
     return (void *)x;
 }
