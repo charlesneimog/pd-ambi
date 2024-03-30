@@ -4,3 +4,6 @@
 [submodule "Libraries/libspatialaudio"]
 	path = Libraries/libspatialaudio
 	url = https://github.com/videolabs/libspatialaudio.git
+[submodule "Libraries/libmysofa"]
+	path = Libraries/libmysofa
+	url = https://github.com/hoene/libmysofa.git

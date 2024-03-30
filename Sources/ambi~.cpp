@@ -1,9 +1,11 @@
 #include <m_pd.h>
 
 //
+#include <fstream>
 #include <string>
 
 // libspatialaudio
+#include <AmbisonicBinauralizer.h>
 #include <AmbisonicDecoder.h>
 #include <AmbisonicEncoderDist.h>
 #include <BFormat.h>
@@ -13,7 +15,10 @@ static t_class *ambi;
 // ─────────────────────────────────────
 typedef struct _ambi {
     t_object xObj;
+    t_canvas *xCanvas;
     t_sample sample;
+    unsigned int blockSize;
+    unsigned int sampleRate;
 
     unsigned int nChIn;
     unsigned int nChOut;
@@ -24,13 +29,16 @@ typedef struct _ambi {
 
     PolarPoint Position;
     CBFormat *BFormat;
+
     CAmbisonicEncoderDist *Encoder;
     CAmbisonicDecoder *Decoder;
+    CAmbisonicBinauralizer *Binauralizer;
 
+    std::string HrtfPath;
     float **ppfSpeakerFeeds;
 
     bool DecoderConfigured = false;
-    bool Binaural = true;
+    bool Binaural = false;
 
     t_float azimuth;
     t_float elevation;
@@ -122,8 +130,13 @@ static t_int *AmbiPerform(t_int *w) {
         x->Encoder->Process(in, n, x->BFormat);
     }
 
-    x->Decoder->Process(x->BFormat, n, x->ppfSpeakerFeeds);
+    // x->Decoder->Process(x->BFormat, n, x->ppfSpeakerFeeds);
 
+    if (x->Binaural) {
+        x->Binauralizer->Process(x->BFormat, x->ppfSpeakerFeeds);
+    } else {
+        x->Decoder->Process(x->BFormat, n, x->ppfSpeakerFeeds);
+    }
     for (int i = 0; i < x->nChOut; i++) {
         t_sample *out = (t_sample *)(w[outChIndex + i]);
         for (int j = 0; j < n; j++) {
@@ -138,18 +151,30 @@ static t_int *AmbiPerform(t_int *w) {
 static void AmbiAddDsp(elseAmbi *x, t_signal **sp) {
 
     unsigned int ChCount = x->nChIn + x->nChOut;
-
+    unsigned tailLength;
     int unsigned blockSize = sp[0]->s_n;
-    x->BFormat->Configure(1, true, blockSize);
-    x->Encoder->Configure(1, true, sys_getsr());
-    x->Decoder->Configure(1, true, blockSize, x->SpeakerSetUp, x->nChOut);
+    int unsigned sampleRate = sys_getsr();
 
-    unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
-    x->ppfSpeakerFeeds = new float *[DecoderSpeakers];
-    for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
-        x->ppfSpeakerFeeds[niSpeaker] = new float[blockSize];
+    // this must be done once or when something change
+    if (blockSize != x->blockSize || sampleRate != x->sampleRate) {
+        x->BFormat->Configure(1, true, blockSize); // set
+        x->Encoder->Configure(1, true, sys_getsr());
+        x->Decoder->Configure(1, true, blockSize, x->SpeakerSetUp, x->nChOut);
+        x->Binauralizer->Configure(1, true, sys_getsr(), blockSize, tailLength,
+                                   x->HrtfPath);
+
+        // memory for speaker feeds
+        unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
+        x->ppfSpeakerFeeds = new float *[DecoderSpeakers];
+        for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
+            x->ppfSpeakerFeeds[niSpeaker] = new float[blockSize];
+        }
+
+        x->blockSize = blockSize;
+        x->sampleRate = sampleRate;
     }
 
+    // this is from circuit~ :)
     t_int *SigVec = (t_int *)getbytes((ChCount + 2) * sizeof(t_int));
     SigVec[0] = (t_int)x;
     SigVec[1] = (t_int)sp[0]->s_n;
@@ -157,6 +182,7 @@ static void AmbiAddDsp(elseAmbi *x, t_signal **sp) {
     for (int i = 0; i < ChCount; i++) {
         SigVec[i + 2] = (t_int)sp[i]->s_vec;
     }
+
     dsp_addv(AmbiPerform, ChCount + 2, SigVec);
     freebytes(SigVec, (ChCount + 2) * sizeof(t_int));
 }
@@ -164,17 +190,20 @@ static void AmbiAddDsp(elseAmbi *x, t_signal **sp) {
 // ─────────────────────────────────────
 static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
     elseAmbi *x = (elseAmbi *)pd_new(ambi);
+    x->xCanvas = canvas_getcurrent();
+    t_symbol *patchDir = canvas_getdir(x->xCanvas);
 
     // check if argv[0] and argc[1] are t_float
     // first two are n input chns and output
     if (argv[0].a_type != A_FLOAT || argv[1].a_type != A_FLOAT) {
-        post("[ambi~]: invalid arguments");
+        post("[ambi~]: First two arguments must be the number of input and "
+             "output channels");
         return NULL;
     }
 
     if (atom_getfloat(argv) != 1) {
         pd_error(x, "[ambi~]: Input channels different from 1 are not "
-                    "supported yet");
+                    "supported yet!");
         return NULL;
     }
 
@@ -188,8 +217,8 @@ static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
             inlet_new(&x->xObj, &x->xObj.ob_pd, &s_signal, &s_signal);
     }
 
-    if (argc > 3) {
-        for (int i = 3; i < argc; i++) {
+    if (argc > 2) {
+        for (int i = 2; i < argc; i++) {
             if (argv[i].a_type == A_SYMBOL) {
                 std::string thing = atom_getsymbol(argv + i)->s_name;
                 if (thing == "-s") { // find better name
@@ -203,9 +232,41 @@ static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
                 } else if (thing == "-b") {
                     x->Binaural = true;
                     x->nChOut = 2;
+                } else if (thing == "-hrtf") {
+                    if (i + 1 < argc) {
+                        i++;
+                        if (argv[i].a_type == A_SYMBOL) {
+                            std::string hrtfPath =
+                                atom_getsymbol(argv + i)->s_name;
+                            if (hrtfPath.size() < 5) {
+                                hrtfPath += ".sofa";
+                            } else {
+                                if (hrtfPath.substr(hrtfPath.size() - 5) ==
+                                    ".sofa") {
+                                    x->HrtfPath = hrtfPath;
+                                } else {
+                                    hrtfPath += ".sofa";
+                                }
+                            }
+                            // patchDir + hrtfPath
+                            std::string completePath = patchDir->s_name;
+                            completePath += "/";
+                            completePath += hrtfPath;
+                            std::ifstream file(completePath);
+                            if (file.good()) {
+                                x->HrtfPath = completePath;
+                            } else {
+                                pd_error(x, "[ambi~]: HRTF file not found, "
+                                            "using default");
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+    if (x->Binaural && x->HrtfPath.empty()) {
+        post("[ambi~] Using default HRTF file");
     }
 
     // malloc outlets for nChOut
@@ -233,14 +294,17 @@ static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
     x->BFormat = new CBFormat();
     x->Encoder = new CAmbisonicEncoderDist();
     x->Decoder = new CAmbisonicDecoder();
+    x->Binauralizer = new CAmbisonicBinauralizer();
 
     return x;
 }
 
+// ==============================================
 static void *FreeAmbi(elseAmbi *x) {
     delete x->BFormat;
     delete x->Encoder;
     delete x->Decoder;
+    delete x->Binauralizer;
 
     unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
 
