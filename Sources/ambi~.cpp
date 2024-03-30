@@ -12,16 +12,16 @@
 
 static t_class *ambi;
 
-// ─────────────────────────────────────
+// ==============================================
 typedef struct _ambi {
     t_object xObj;
     t_canvas *xCanvas;
     t_sample sample;
-    unsigned int blockSize;
-    unsigned int sampleRate;
+    unsigned blockSize;
+    unsigned sampleRate;
 
-    unsigned int nChIn;
-    unsigned int nChOut;
+    unsigned nChIn;
+    unsigned nChOut;
     std::string SpeakerConfig;
     Amblib_SpeakerSetUps SpeakerSetUp;
     bool NeedSpeakersPosition = false;
@@ -36,6 +36,8 @@ typedef struct _ambi {
 
     std::string HrtfPath;
     float **ppfSpeakerFeeds;
+
+    float **speakersSetup;
 
     bool DecoderConfigured = false;
     bool Binaural = false;
@@ -83,10 +85,41 @@ static int SetSpeakerConfig(elseAmbi *x, std::string config) {
 static void NewSpeaker(elseAmbi *x, t_float nCh, t_float azi, t_float ele,
                        t_float dis) {
 
-    if (nCh != x->nChOut) {
-        pd_error(x, "[ambi~]: The number of channels must be equal to the "
-                    "number of speakers in the configuration");
+    post("Configuring speaker %d", (int)nCh);
+    nCh = (int)nCh - 1; // fix index for the channels numbers
+    post("Configuring speaker %d", (int)nCh);
+
+    if (!x->DecoderConfigured) {
+        pd_error(x, "[ambi~]: Decoder not configured yet, turn the DSP on");
         return;
+    }
+
+    if (nCh > x->Decoder->GetSpeakerCount()) {
+        pd_error(x, "[ambi~]: There is just %d speakers in the configuration",
+                 x->Decoder->GetSpeakerCount());
+    }
+
+    PolarPoint newSpeakerPosition;
+    newSpeakerPosition.fAzimuth = DegreesToRadians(azi);
+    newSpeakerPosition.fElevation = DegreesToRadians(ele);
+    newSpeakerPosition.fDistance = dis;
+    x->Decoder->SetPosition(nCh, newSpeakerPosition);
+
+    x->speakersSetup[(int)nCh][1] = 1;
+    post("[ambi~]: Speaker channel %d set", (int)nCh + 1);
+
+    bool allSpeakersSet = true;
+    for (int i = 0; i < x->nChOut; i++) {
+        if (x->speakersSetup[i][1] == 0) {
+            allSpeakersSet = false;
+            break;
+        }
+    }
+    if (allSpeakersSet && !x->SpeakerPositionSet) {
+        x->SpeakerPositionSet = true;
+        post("[ambi~]: All speakers set");
+    } else {
+        x->Decoder->Refresh();
     }
 
     return;
@@ -103,15 +136,23 @@ static void SetDistance(elseAmbi *x, t_floatarg f) {
     x->Position.fDistance = f;
 }
 
+static void ToggleBinaural(elseAmbi *x, t_floatarg f) {
+    if (f == 0) {
+        x->Binaural = false;
+        post("[ambi~]: Binaural mode disabled");
+    } else {
+        x->Binaural = true;
+        post("[ambi~]: Binaural mode enabled");
+    }
+}
+
 // ==============================================
 static t_int *AmbiPerform(t_int *w) {
     elseAmbi *x = (elseAmbi *)(w[1]);
-    unsigned int n = (int)(w[2]);
-
-    unsigned int DspArr = x->nChIn + x->nChOut + 3;
-
-    unsigned int inChIndex = 3;
-    unsigned int outChIndex = 3 + x->nChIn;
+    unsigned n = (int)(w[2]);
+    unsigned DspArr = x->nChIn + x->nChOut + 3;
+    unsigned inChIndex = 3;
+    unsigned outChIndex = 3 + x->nChIn;
 
     if (!x->SpeakerPositionSet) {
         for (int i = 0; i < x->nChOut; i++) {
@@ -129,8 +170,6 @@ static t_int *AmbiPerform(t_int *w) {
         t_sample *in = (t_sample *)(w[inChIndex + i]);
         x->Encoder->Process(in, n, x->BFormat);
     }
-
-    // x->Decoder->Process(x->BFormat, n, x->ppfSpeakerFeeds);
 
     if (x->Binaural) {
         x->Binauralizer->Process(x->BFormat, x->ppfSpeakerFeeds);
@@ -172,6 +211,7 @@ static void AmbiAddDsp(elseAmbi *x, t_signal **sp) {
 
         x->blockSize = blockSize;
         x->sampleRate = sampleRate;
+        x->DecoderConfigured = true;
     }
 
     // this is from circuit~ :)
@@ -289,6 +329,16 @@ static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
     }
 
     SetSpeakerConfig(x, x->SpeakerConfig);
+    if (x->NeedSpeakersPosition) {
+        // create an array with the channel number and if it was configured or
+        // not
+        x->speakersSetup = new float *[x->nChOut];
+        for (int i = 0; i < x->nChOut; i++) {
+            x->speakersSetup[i] = new float[2];
+            x->speakersSetup[i][0] = i;
+            x->speakersSetup[i][1] = 0;
+        }
+    }
 
     // check how to define sample rate, needed?
     x->BFormat = new CBFormat();
@@ -332,7 +382,12 @@ void ambi_tilde_setup(void) {
     class_addmethod(ambi, (t_method)NewSpeaker, gensym("speaker"), A_FLOAT,
                     A_FLOAT, A_FLOAT, A_FLOAT, 0);
 
+    // source position
     class_addmethod(ambi, (t_method)SetAzimuth, gensym("azi"), A_FLOAT, 0);
     class_addmethod(ambi, (t_method)SetElevation, gensym("ele"), A_FLOAT, 0);
     class_addmethod(ambi, (t_method)SetDistance, gensym("dis"), A_FLOAT, 0);
+
+    // another things
+    class_addmethod(ambi, (t_method)ToggleBinaural, gensym("binaural"), A_FLOAT,
+                    0);
 }

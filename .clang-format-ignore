@@ -1,2 +1,2 @@
-./Libraries
-./Resources/pd.build
+./Libraries/*
+./Resources/pd.build/*
