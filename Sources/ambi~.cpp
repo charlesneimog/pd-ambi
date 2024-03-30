@@ -85,9 +85,7 @@ static int SetSpeakerConfig(elseAmbi *x, std::string config) {
 static void NewSpeaker(elseAmbi *x, t_float nCh, t_float azi, t_float ele,
                        t_float dis) {
 
-    post("Configuring speaker %d", (int)nCh);
     nCh = (int)nCh - 1; // fix index for the channels numbers
-    post("Configuring speaker %d", (int)nCh);
 
     if (!x->DecoderConfigured) {
         pd_error(x, "[ambi~]: Decoder not configured yet, turn the DSP on");
@@ -121,7 +119,6 @@ static void NewSpeaker(elseAmbi *x, t_float nCh, t_float azi, t_float ele,
     } else {
         x->Decoder->Refresh();
     }
-
     return;
 }
 
@@ -136,6 +133,7 @@ static void SetDistance(elseAmbi *x, t_floatarg f) {
     x->Position.fDistance = f;
 }
 
+// ==============================================
 static void ToggleBinaural(elseAmbi *x, t_floatarg f) {
     if (f == 0) {
         x->Binaural = false;
