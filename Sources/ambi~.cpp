@@ -234,8 +234,9 @@ static void *NewAmbi(t_symbol *s, int argc, t_atom *argv) {
     // check if argv[0] and argc[1] are t_float
     // first two are n input chns and output
     if (argv[0].a_type != A_FLOAT || argv[1].a_type != A_FLOAT) {
-        post("[ambi~]: First two arguments must be the number of input and "
-             "output channels");
+        pd_error(nullptr,
+                 "[ambi~]: First two arguments must be the number of input and "
+                 "output channels");
         return NULL;
     }
 
