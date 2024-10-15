@@ -28,11 +28,11 @@ typedef struct _ambi {
     bool SpeakerPositionSet = false;
 
     PolarPoint Position;
-    CBFormat *BFormat;
 
-    CAmbisonicEncoderDist *Encoder;
+    CAmbisonicEncoder *Encoder;
     CAmbisonicDecoder *Decoder;
     CAmbisonicBinauralizer *Binauralizer;
+    CBFormat *BFormat;
 
     std::string HrtfPath;
     float **ppfSpeakerFeeds;
@@ -54,23 +54,23 @@ typedef struct _ambi {
 // ==============================================
 static int SetSpeakerConfig(elseAmbi *x, std::string config) {
     if (config == "stereo") {
-        x->SpeakerSetUp = kAmblib_Stereo;
+        x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_Stereo;
         x->SpeakerPositionSet = true;
         return 0;
     } else if (config == "quad") {
-        x->SpeakerSetUp = kAmblib_Quad;
+        x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_Quad;
         x->SpeakerPositionSet = true;
         return 0;
     } else if (config == "5.1") {
-        x->SpeakerSetUp = kAmblib_51;
+        x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_51;
         x->SpeakerPositionSet = true;
         return 0;
     } else if (config == "7.1") {
-        x->SpeakerSetUp = kAmblib_71;
+        x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_71;
         x->SpeakerPositionSet = true;
         return 0;
     } else if (config == "custom") {
-        x->SpeakerSetUp = kAmblib_CustomSpeakerSetUp;
+        x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_CustomSpeakerSetUp;
         x->NeedSpeakersPosition = true;
         x->SpeakerPositionSet = false;
         return 0;
@@ -174,6 +174,7 @@ static t_int *AmbiPerform(t_int *w) {
     } else {
         x->Decoder->Process(x->BFormat, n, x->ppfSpeakerFeeds);
     }
+
     for (int i = 0; i < x->nChOut; i++) {
         t_sample *out = (t_sample *)(w[outChIndex + i]);
         for (int j = 0; j < n; j++) {
@@ -194,9 +195,16 @@ static void AmbiAddDsp(elseAmbi *x, t_signal **sp) {
 
     // this must be done once or when something change
     if (blockSize != x->blockSize || sampleRate != x->sampleRate) {
+        // binaural
         x->BFormat->Configure(1, true, blockSize); // set
-        x->Encoder->Configure(1, true, sys_getsr());
-        x->Decoder->Configure(1, true, blockSize, x->SpeakerSetUp, x->nChOut);
+
+        float fadeTimeInMilliSec =
+            1000.f * (float)blockSize / (float)sampleRate;
+
+        x->Encoder->Configure(1, true, sys_getsr(), fadeTimeInMilliSec);
+
+        x->Decoder->Configure(1, true, blockSize, sys_getsr(), x->SpeakerSetUp,
+                              x->nChOut);
         x->Binauralizer->Configure(1, true, sys_getsr(), blockSize, tailLength,
                                    x->HrtfPath);
 

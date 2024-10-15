@@ -51,8 +51,12 @@ target_include_directories(
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/libspatialaudio/include/")
 target_include_directories(
   ambi_tilde
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/libspatialaudio/include/dsp")
+target_include_directories(
+  ambi_tilde
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/libspatialaudio/source/kiss_fft/")
+
 target_include_directories(
   ambi_tilde PRIVATE "${CMAKE_BINARY_DIR}/Libraries/libmysofa/src/")
 set_target_properties(ambi_tilde PROPERTIES CXX_STANDARD 11)
