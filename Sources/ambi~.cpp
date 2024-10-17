@@ -1,7 +1,9 @@
+#include <filesystem>
+#include <string>
+
 #include <m_pd.h>
 
-//
-#include <string>
+#include <m_imp.h>
 
 // libspatialaudio
 #include <AmbisonicBinauralizer.h>
@@ -9,16 +11,27 @@
 #include <AmbisonicEncoderDist.h>
 #include <BFormat.h>
 
-static t_class *ambi;
+namespace fs = std::filesystem;
+
+static t_class *ambi_class;
 
 // ==============================================
-typedef struct _ambi {
+class ambi_tilde {
+  public:
     t_object xObj;
     t_canvas *xCanvas;
+    std::string patchDir;
+    std::string exterDir;
     t_sample sample;
     unsigned blockSize;
     unsigned sampleRate;
+    unsigned tailLength;
 
+    // multichannels
+    unsigned Chs;
+    bool multichannel;
+
+    //
     unsigned nChIn;
     unsigned nChOut;
     std::string SpeakerConfig;
@@ -26,13 +39,11 @@ typedef struct _ambi {
     bool NeedSpeakersPosition = false;
     bool SpeakerPositionSet = false;
 
+    // Position
     PolarPoint Position;
-    t_float azimuth;
-    t_float elevation;
-    t_float distance;
 
     // Encoder config
-    CAmbisonicEncoderDist *Encoder;
+    CAmbisonicEncoder *Encoder;
 
     // Decoder config
     CAmbisonicDecoder *Decoder;
@@ -41,68 +52,182 @@ typedef struct _ambi {
     CBFormat *BFormat;
 
     // Binaural config
+    bool binauralSet = false;
     CAmbisonicBinauralizer *Binauralizer;
     std::string HrtfPath;
     bool lowcpu;
 
     //
-    t_sample **ppfSpeakerFeeds;
-    t_sample **speakersSetup;
+    t_sample **SpeakersArray;
+    t_sample **SpeakersSetup;
 
     bool DecoderConfigured = false;
     bool Binaural = false;
 
-    t_inlet *Inlet;
-    t_outlet **outlets;
+    t_outlet **Outlets;
+};
 
-} ambi_tilde;
+// ─────────────────────────────────────
+static void ambi_configure(ambi_tilde *x, int blockSize, int sampleRate) {
+    if (blockSize == 0 || sampleRate == 0) {
+        pd_error(x, "[ambi~]: Init Dsp first!");
+        return;
+    }
+    x->DecoderConfigured = false;
+
+    int oldSpeakersCount = x->Decoder->GetSpeakerCount();
+
+    float fadeMs = 1000.f * blockSize / sampleRate;
+    bool sucess = x->BFormat->Configure(1, true, blockSize);
+    if (!sucess) {
+        pd_error(x, "[ambi~]: Error configuring BFormat");
+        return;
+    }
+
+    sucess = x->Encoder->Configure(1, true, sys_getsr(), fadeMs);
+    if (!sucess) {
+        pd_error(x, "[ambi~]: Error configuring Encoder");
+        return;
+    }
+
+    unsigned int DecoderSpeakers;
+    if (x->Binaural) {
+        sucess = x->Binauralizer->Configure(1, true, sys_getsr(), blockSize,
+                                            x->tailLength, x->HrtfPath);
+        if (!sucess) {
+            pd_error(x, "[ambi~]: Error configuring Binauralizer");
+            return;
+        }
+    } else {
+        sucess = x->Decoder->Configure(1, true, blockSize, sys_getsr(),
+                                       x->SpeakerSetUp, x->nChOut);
+        if (!sucess) {
+            pd_error(x, "[ambi~]: Error configuring Decoder");
+            return;
+        }
+    }
+    DecoderSpeakers = x->Decoder->GetSpeakerCount();
+
+    if (x->SpeakersArray) {
+        for (int niSpeaker = 0; niSpeaker < oldSpeakersCount; niSpeaker++) {
+            delete[] x->SpeakersArray[niSpeaker];
+        }
+        delete[] x->SpeakersArray;
+    }
+
+    if (x->NeedSpeakersPosition && x->SpeakersSetup) {
+        for (int i = 0; i < x->nChOut; i++) {
+            delete[] x->SpeakersSetup[i];
+        }
+        x->SpeakersSetup = new float *[x->nChOut];
+        for (int i = 0; i < x->nChOut; i++) {
+            x->SpeakersSetup[i] = new float[2];
+            x->SpeakersSetup[i][0] = i;
+            x->SpeakersSetup[i][1] = 0;
+        }
+    }
+    printf("position ok\n");
+
+    x->SpeakersArray = new float *[DecoderSpeakers];
+    for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
+        x->SpeakersArray[niSpeaker] = new float[blockSize];
+    }
+    x->DecoderConfigured = true;
+    printf("ok\n");
+}
 
 // ==============================================
-static int ambi_speakerconfig(ambi_tilde *x, std::string config) {
+// returns true on sucess
+static bool ambi_speakerconfig(ambi_tilde *x) {
+
+    if (x->nChOut == 2) {
+        x->SpeakerConfig = "stereo";
+    } else if (x->nChOut == 4) {
+        x->SpeakerConfig = "quad";
+    } else {
+        pd_error(x, "[ambi~]: You are using a custom speaker configuration "
+                    "but you haven't specified the number of speakers. Use "
+                    "[-s custom] to set.");
+        return false;
+    }
+
+    std::string config = x->SpeakerConfig;
     if (config == "stereo") {
         x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_Stereo;
         x->SpeakerPositionSet = true;
-        return 0;
+        return true;
     } else if (config == "quad") {
         x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_Quad;
         x->SpeakerPositionSet = true;
-        return 0;
+        return true;
     } else if (config == "5.1") {
         x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_51;
         x->SpeakerPositionSet = true;
-        return 0;
+        return true;
     } else if (config == "7.1") {
         x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_71;
         x->SpeakerPositionSet = true;
-        return 0;
+        return true;
     } else if (config == "custom") {
         x->SpeakerSetUp = Amblib_SpeakerSetUps::kAmblib_CustomSpeakerSetUp;
         x->NeedSpeakersPosition = true;
         x->SpeakerPositionSet = false;
-        return 0;
+        return true;
     } else {
         pd_error(x, "[ambi~]: invalid speaker configuration");
         x->SpeakerPositionSet = false;
-        return -1;
+        return false;
     }
 }
 
 // ─────────────────────────────────────
 static void ambi_binauralconfig(ambi_tilde *x, t_symbol *s, int argc,
                                 t_atom *argv) {
-    std::string method = atom_getsymbol(argv + 1)->s_name;
-    if (method == "hrth") {
-        if (argc < 3) {
-            pd_error(x, "[ambi~]: HRTF file path not provided");
-            return;
-        }
-        x->HrtfPath = atom_getsymbol(argv + 2)->s_name;
-    } else if (method == "lowcpu") {
-        bool lowcpu = atom_getfloat(argv + 2);
-        if (lowcpu) {
-            x->lowcpu = true;
+    if (argc == 2) {
+        bool binaural = atom_getfloat(argv + 1);
+        if (binaural) {
+            x->Binaural = true;
+            if (!x->binauralSet) {
+                x->Binauralizer->Configure(1, true, sys_getsr(), x->blockSize,
+                                           x->tailLength, x->HrtfPath);
+            }
+            post("[ambi~]: Binaural on");
+            x->binauralSet = true;
         } else {
-            x->lowcpu = false;
+            x->Binaural = false;
+            post("[ambi~]: Binaural off");
+        }
+    }
+
+    if (argc == 3) {
+        std::string method = atom_getsymbol(argv + 1)->s_name;
+        if (method == "hrtf") {
+            if (argc < 3) {
+                pd_error(x, "[ambi~]: HRTF file path not provided");
+                return;
+            }
+            std::string file =
+                x->patchDir + "/" + atom_getsymbol(argv + 2)->s_name;
+            if (fs::exists(file)) {
+                x->HrtfPath = file;
+            } else {
+                pd_error(x, "[ambi~]: HRTF file not found");
+                return;
+            }
+        } else if (method == "lowcpu") {
+            bool lowcpu = atom_getfloat(argv + 2);
+            if (lowcpu) {
+                x->lowcpu = true;
+                post("[ambi~]: Low CPU mode on");
+            } else {
+                x->lowcpu = false;
+                post("[ambi~]: Low CPU mode off");
+            }
+        }
+
+        if (x->Binaural) {
+            x->Binauralizer->Configure(1, true, sys_getsr(), x->blockSize,
+                                       x->tailLength, x->HrtfPath);
         }
     }
 }
@@ -119,24 +244,27 @@ static void ambi_encoderconfig(ambi_tilde *x, t_symbol *s, int argc,
         float gain = atom_getfloat(argv + 2);
         x->Encoder->SetGain(gain);
     } else if (method == "orderweight") {
-        if (argc < 5) {
+        if (argc < 4) {
             pd_error(x, "[ambi~]: Order and weight not provided");
             return;
         }
-        float order = atom_getfloat(argv + 2);
+        unsigned order = atom_getint(argv + 2);
         float weight = atom_getfloat(argv + 3);
+        post("[ambi~]: Order %d Weight %f", order, weight);
         x->Encoder->SetOrderWeight(order, weight);
     } else if (method == "coeff") {
-        if (argc < 5) {
+        if (argc < 4) {
             pd_error(x, "[ambi~]: Channel and Coeff not provided");
             return;
         }
-        float channel = atom_getfloat(argv + 2);
+        unsigned channel = atom_getint(argv + 2);
         float coeff = atom_getfloat(argv + 3);
+        post("[ambi~]: Channel %d Coeff %f", channel, coeff);
         x->Encoder->SetCoefficient(channel, coeff);
-    } else if (method == "roomsize") {
-        float size = atom_getfloat(argv + 2);
-        x->Encoder->SetRoomRadius(size);
+    } else {
+        pd_error(x, "[ambi~]: invalid method, options are: gain, orderweight, "
+                    "coeff");
+        return;
     }
 
     x->Encoder->Refresh();
@@ -145,26 +273,76 @@ static void ambi_encoderconfig(ambi_tilde *x, t_symbol *s, int argc,
 // ─────────────────────────────────────
 static void ambi_decoderconfig(ambi_tilde *x, t_symbol *s, int argc,
                                t_atom *argv) {
-    std::string method = atom_getsymbol(argv + 1)->s_name;
 
+    if (!x->DecoderConfigured) {
+        pd_error(x, "[ambi~]: Decoder not configured yet, turn the DSP on");
+    }
+
+    std::string method = atom_getsymbol(argv + 1)->s_name;
     if (method == "orderweight") {
         if (argc < 5) {
             pd_error(x, "[ambi~]: Order and weight not provided");
             return;
         }
-
-        float speaker = atom_getfloat(argv + 2);
-        float order = atom_getfloat(argv + 3);
+        unsigned speaker = atom_getint(argv + 2) - 1;
+        unsigned order = atom_getint(argv + 3);
         float weight = atom_getfloat(argv + 4);
+        if (speaker > x->Decoder->GetSpeakerCount() - 1) {
+            pd_error(x,
+                     "[ambi~]: There is just %d speakers in the current "
+                     "configuration",
+                     x->Decoder->GetSpeakerCount());
+            return;
+        } else if (speaker < 0) {
+            pd_error(x, "[ambi~]: Speaker must be a positive number");
+            return;
+        }
+
+        if (order < 1) {
+            pd_error(x, "[ambi~]: Order must be from 1 to 7");
+            return;
+        }
+
+        post("[ambi~]: Speaker %d Order %d Weight %f", speaker + 1, order,
+             weight);
         x->Decoder->SetOrderWeight(speaker, order, weight);
     } else if (method == "coeff") {
         if (argc < 5) {
             pd_error(x, "[ambi~]: Channel and Coeff not provided");
             return;
         }
-        float speaker = atom_getfloat(argv + 2);
-        float order = atom_getfloat(argv + 3);
+        unsigned speaker = atom_getint(argv + 2) - 1;
+        unsigned order = atom_getint(argv + 3);
         float weight = atom_getfloat(argv + 4);
+        if (speaker > x->Decoder->GetSpeakerCount() - 1) {
+            pd_error(x,
+                     "[ambi~]: There is just %d speakers in the current "
+                     "configuration",
+                     x->Decoder->GetSpeakerCount());
+            return;
+        } else if (speaker < 0) {
+            pd_error(x, "[ambi~]: Speaker must be a positive number");
+            return;
+        }
+
+        if (order < 1) {
+            pd_error(x, "[ambi~]: Order must be from 1 to 7");
+            return;
+        }
+
+        post("[ambi~]: Speaker %d Order %d Weight %f", speaker + 1, order,
+             weight);
+
+        if (speaker > x->Decoder->GetSpeakerCount()) {
+            pd_error(x,
+                     "[ambi~]: There is just %d speakers in the configuration",
+                     x->Decoder->GetSpeakerCount());
+            return;
+        } else if (speaker < 0) {
+            pd_error(x, "[ambi~]: Speaker must be a positive number");
+        }
+
+        post("[ambi~]: Speaker %d Order %d Weight %f", speaker, order, weight);
         x->Decoder->SetCoefficient(speaker, order, weight);
     } else {
         pd_error(x, "[ambi~]: invalid method, options are: orderweight, coeff");
@@ -186,6 +364,30 @@ static void ambi_speakersconfig(ambi_tilde *x, t_symbol *s, int argc,
         }
         x->HrtfPath = atom_getsymbol(argv + 2)->s_name;
     }
+    // set amount of speakers
+    else if (method == "number") {
+        if (!x->multichannel) {
+            pd_error(x, "[ambi~]: Multichannel mode is off, you can't change "
+                        "the amount of speakers");
+            return;
+        }
+        if (argc < 3) {
+            pd_error(x, "[ambi~]: Amount of speakers not provided");
+            return;
+        }
+        unsigned nCh = atom_getint(argv + 2);
+        if (nCh < 1) {
+            pd_error(x,
+                     "[ambi~]: Amount of speakers must be a positive number");
+            return;
+        }
+        x->nChOut = nCh;
+        post("[ambi~]: Amount of speakers set to %d", nCh);
+        if (!ambi_speakerconfig(x)) {
+            return;
+        }
+        canvas_update_dsp();
+    }
 
     return;
 }
@@ -203,54 +405,13 @@ static void ambi_set(ambi_tilde *x, t_symbol *s, int argc, t_atom *argv) {
     } else if (processor == "encoder") {
         ambi_encoderconfig(x, s, argc, argv);
     } else if (processor == "decoder") {
-        ambi_encoderconfig(x, s, argc, argv);
+        ambi_decoderconfig(x, s, argc, argv);
     } else if (processor == "speakers") {
         ambi_speakersconfig(x, s, argc, argv);
     } else {
         pd_error(x, "[ambi~]: invalid processor, options are: binaural, "
                     "encoder, decoder");
     }
-}
-
-// ==============================================
-static void ambi_speakers(ambi_tilde *x, t_int nCh, t_float azi, t_float ele,
-                          t_float dis) {
-
-    nCh = (int)nCh - 1; // fix index for the channels numbers
-
-    if (!x->DecoderConfigured) {
-        pd_error(x, "[ambi~]: Decoder not configured yet, turn the DSP on");
-        return;
-    }
-
-    if (nCh > x->Decoder->GetSpeakerCount()) {
-        pd_error(x, "[ambi~]: There is just %d speakers in the configuration",
-                 x->Decoder->GetSpeakerCount());
-    }
-
-    PolarPoint newSpeakerPosition;
-    newSpeakerPosition.fAzimuth = DegreesToRadians(azi);
-    newSpeakerPosition.fElevation = DegreesToRadians(ele);
-    newSpeakerPosition.fDistance = dis;
-    x->Decoder->SetPosition(nCh, newSpeakerPosition);
-
-    x->speakersSetup[nCh][1] = 1;
-    post("[ambi~]: Speaker channel %d set", (int)nCh + 1);
-
-    bool allSpeakersSet = true;
-    for (int i = 0; i < x->nChOut; i++) {
-        if (x->speakersSetup[i][1] == 0) {
-            allSpeakersSet = false;
-            break;
-        }
-    }
-    if (allSpeakersSet && !x->SpeakerPositionSet) {
-        x->SpeakerPositionSet = true;
-        post("[ambi~]: All speakers set");
-    } else {
-        x->Decoder->Refresh();
-    }
-    return;
 }
 
 // ==============================================
@@ -268,162 +429,150 @@ static void ambi_dis(ambi_tilde *x, t_floatarg f) { x->Position.fDistance = f; }
 
 // ─────────────────────────────────────
 static t_int *ambi_perform(t_int *w) {
-    ambi_tilde *x = (ambi_tilde *)(w[1]);
-    unsigned n = (int)(w[2]);
-    unsigned DspArr = 1 + x->nChOut + 3;
-    unsigned outChIndex = 3 + 1;
 
-    for (int i = 0; i < x->nChOut; i++) {
-        post("float %f", w[i]);
-    }
+    ambi_tilde *x = (ambi_tilde *)(w[1]);
+    unsigned n = (t_int)(w[2]);
+    t_sample *in = (t_sample *)(w[3]);
+    t_sample *out = (t_sample *)(w[4]);
+    unsigned DspArr = 1 + 3 + x->nChOut;
 
     // silence the output
     if (!x->SpeakerPositionSet) {
+        for (int i = 0; i < (x->nChOut * x->blockSize); i++) {
+            out[i] = 0;
+        }
+        if (x->multichannel) {
+            return w + 5;
+        } else {
+            return w + DspArr;
+        }
+    }
+
+    unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
+    x->Encoder->SetPosition(x->Position);
+    x->Encoder->Process(in, n, x->BFormat);
+
+    if (x->Binaural) {
+        x->Binauralizer->Process(x->BFormat, x->SpeakersArray);
+    } else {
+        x->Decoder->Process(x->BFormat, n, x->SpeakersArray);
+    }
+
+    if (x->multichannel) {
+        int outIndex = 0;
         for (int i = 0; i < x->nChOut; i++) {
-            t_sample *out = (t_sample *)(w[outChIndex + i]);
+            for (int j = 0; j < x->blockSize; j++) {
+                out[outIndex] = x->SpeakersArray[i][j];
+                outIndex++;
+            }
+        }
+        printf("\n");
+        printf("end copy\n");
+        return (w + 5);
+    } else {
+        for (int i = 0; i < x->nChOut; i++) {
+            t_sample *out = (t_sample *)(w[4 + i]);
             for (int j = 0; j < n; j++) {
-                out[j] = 0;
+                out[j] = x->SpeakersArray[i][j];
             }
         }
         return w + DspArr;
     }
-
-    // Position
-    unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
-    x->Encoder->SetPosition(x->Position);
-
-    // Encoder
-    t_sample *in = (t_sample *)(w[3]);
-    x->Encoder->Process(in, n, x->BFormat);
-
-    // Process the audio
-    if (x->Binaural) {
-        x->Binauralizer->Process(x->BFormat, x->ppfSpeakerFeeds);
-    } else {
-        x->Decoder->Process(x->BFormat, n, x->ppfSpeakerFeeds);
-    }
-
-    // copy output to the out
-    for (int i = 0; i < x->nChOut; i++) {
-        t_sample *out = (t_sample *)(w[outChIndex + i]);
-        for (int j = 0; j < n; j++) {
-            out[j] = x->ppfSpeakerFeeds[i][j];
-        }
-    }
-
-    return w + DspArr;
 }
 
-// ==============================================
+// ─────────────────────────────────────
 static void ambi_adddsp(ambi_tilde *x, t_signal **sp) {
-    unsigned tailLength;
-    int unsigned blockSize = sp[0]->s_n;
-    int unsigned sampleRate = sys_getsr();
+    printf("ambi_adddsp\n");
+    if (sp[0]->s_nchans != 1) {
+        pd_error(x, "[ambi~]: ambi~ object just work with mono input!");
+        return;
+    }
 
-    if (blockSize != x->blockSize || sampleRate != x->sampleRate) {
-        x->BFormat->Configure(1, true, blockSize);
+    x->tailLength = 0;
+    unsigned blockSize = sp[0]->s_n;
+    unsigned sampleRate = sys_getsr();
 
-        float fadeTimeInMilliSec =
-            1000.f * (float)blockSize / (float)sampleRate;
+    if (blockSize != x->blockSize || sampleRate != x->sampleRate ||
+        x->Decoder->GetSpeakerCount() != x->nChOut) {
+        ambi_configure(x, blockSize, sampleRate);
+    }
 
-        x->Encoder->Configure(1, true, sys_getsr());
-        x->Decoder->Configure(1, true, blockSize, sys_getsr(), x->SpeakerSetUp,
-                              x->nChOut);
-        x->Binauralizer->Configure(1, true, sys_getsr(), blockSize, tailLength,
-                                   x->HrtfPath);
-
-        // memory for speaker feeds
-        unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
-        x->ppfSpeakerFeeds = new float *[DecoderSpeakers];
-        for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
-            x->ppfSpeakerFeeds[niSpeaker] = new float[blockSize];
+    if (x->multichannel) {
+        signal_setmultiout(&sp[1], x->nChOut);
+        dsp_add(ambi_perform, 4, x, sp[0]->s_length * sp[0]->s_nchans,
+                sp[0]->s_vec, sp[1]->s_vec);
+    } else {
+        for (int i = 0; i < x->nChOut; i++) {
+            signal_setmultiout(&sp[i + 1], 1);
         }
 
-        x->blockSize = blockSize;
-        x->sampleRate = sampleRate;
-        x->DecoderConfigured = true;
+        t_int *SigVec = (t_int *)getbytes((x->nChOut + 3) * sizeof(t_int));
+        SigVec[0] = (t_int)x;
+        SigVec[1] = (t_int)sp[0]->s_n;
+
+        for (int i = 0; i < (x->nChOut + 1); i++) {
+            SigVec[i + 2] = (t_int)sp[i]->s_vec;
+        }
+        dsp_addv(ambi_perform, x->nChOut + 3, SigVec);
+        freebytes(SigVec, (x->nChOut + 3) * sizeof(t_int));
     }
-
-    // this is from circuit~ :)
-    t_int *SigVec = (t_int *)getbytes((x->nChOut + 3) * sizeof(t_int));
-    SigVec[0] = (t_int)x;
-    SigVec[1] = (t_int)sp[0]->s_n;
-
-    for (int i = 0; i < (x->nChOut + 1); i++) {
-        SigVec[i + 2] = (t_int)sp[i]->s_vec;
-    }
-
-    dsp_addv(ambi_perform, x->nChOut + 3, SigVec);
-    freebytes(SigVec, (x->nChOut + 3) * sizeof(t_int));
+    x->blockSize = blockSize;
 }
 
 // ─────────────────────────────────────
 static void *ambi_new(t_symbol *s, int argc, t_atom *argv) {
-    ambi_tilde *x = (ambi_tilde *)pd_new(ambi);
+    ambi_tilde *x = (ambi_tilde *)pd_new(ambi_class);
     x->xCanvas = canvas_getcurrent();
     t_symbol *patchDir = canvas_getdir(x->xCanvas);
 
-    // check if argv[0] and argc[1] are t_float
-    // first two are n input chns and output
     if (argv[0].a_type != A_FLOAT) {
         pd_error(nullptr,
                  "[ambi~]: First two arguments must be the number of input and "
                  "output channels");
         return NULL;
     }
-    x->nChOut = atom_getfloat(argv);
 
-    if (argc > 2) {
-        for (int i = 2; i < argc; i++) {
+    if (argc > 1) {
+        for (int i = 1; i < argc; i++) {
             if (argv[i].a_type == A_SYMBOL) {
-                std::string thing = atom_getsymbol(argv + i)->s_name;
-                if (thing == "-s") {
-                    i++;
-                    if (argv[i].a_type == A_SYMBOL) {
-                        x->SpeakerConfig = atom_getsymbol(argv + i)->s_name;
-                    } else if (argv[i].a_type == A_FLOAT) {
-                        x->SpeakerConfig =
-                            std::to_string(atom_getfloat(argv + i));
-                    }
-                } else if (thing == "-b") {
-                    x->Binaural = true;
-                    x->nChOut = 2;
+                std::string std = atom_getsymbol(argv + i)->s_name;
+                if (std == "-m") {
+                    x->multichannel = true;
                 }
             }
         }
     }
-    if (x->Binaural && x->HrtfPath.empty()) {
-        post("[ambi~] Using default HRTF file");
+
+    x->exterDir = ambi_class->c_externdir->s_name;
+    x->patchDir = patchDir->s_name;
+    x->HrtfPath = x->exterDir + "/nh906.sofa";
+
+    // Check if the file exists
+    if (!fs::exists(x->HrtfPath)) {
+        pd_error(x, "[ambi~]: Default HRTF not file found: %s",
+                 x->HrtfPath.c_str());
     }
 
-    // malloc outlets for nChOut
-    x->outlets = (t_outlet **)malloc(x->nChOut * sizeof(t_outlet *));
-    for (int i = 0; i < x->nChOut; i++) {
-        x->outlets[i] = outlet_new(&x->xObj, &s_signal);
-    }
-
-    if (x->SpeakerConfig.empty()) {
-        if (x->nChOut == 2) {
-            x->SpeakerConfig = "stereo";
-        } else if (x->nChOut == 4) {
-            x->SpeakerConfig = "quad";
-        } else {
-            pd_error(x, "[ambi~]: You are using a custom speaker configuration "
-                        "but you haven't specified the number of speakers. Use "
-                        "[-s custom] to set.");
-            return NULL;
+    x->nChOut = atom_getfloat(argv);
+    x->Outlets = (t_outlet **)malloc(x->nChOut * sizeof(t_outlet *));
+    if (x->multichannel) {
+        x->Outlets[0] = outlet_new(&x->xObj, &s_signal);
+    } else {
+        for (int i = 0; i < x->nChOut; i++) {
+            x->Outlets[i] = outlet_new(&x->xObj, &s_signal);
         }
     }
 
-    ambi_speakerconfig(x, x->SpeakerConfig);
+    if (!ambi_speakerconfig(x)) {
+        return nullptr;
+    }
+
     if (x->NeedSpeakersPosition) {
-        // create an array with the channel number and if it was configured or
-        // not
-        x->speakersSetup = new float *[x->nChOut];
+        x->SpeakersSetup = new float *[x->nChOut];
         for (int i = 0; i < x->nChOut; i++) {
-            x->speakersSetup[i] = new float[2];
-            x->speakersSetup[i][0] = i;
-            x->speakersSetup[i][1] = 0;
+            x->SpeakersSetup[i] = new float[2];
+            x->SpeakersSetup[i][0] = i;
+            x->SpeakersSetup[i][1] = 0;
         }
     }
 
@@ -446,36 +595,35 @@ static void *ambi_free(ambi_tilde *x) {
     unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
 
     for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
-        delete[] x->ppfSpeakerFeeds[niSpeaker];
+        delete[] x->SpeakersArray[niSpeaker];
     }
-    delete[] x->ppfSpeakerFeeds;
+    delete[] x->SpeakersArray;
 
     if (x->NeedSpeakersPosition) {
         for (int i = 0; i < x->nChOut; i++) {
-            delete[] x->speakersSetup[i];
+            delete[] x->SpeakersSetup[i];
         }
     }
 
-    free(x->outlets);
-    return (void *)x;
+    free(x->Outlets);
+    return x;
 }
 
 // ─────────────────────────────────────
 extern "C" void ambi_tilde_setup(void) {
-    ambi =
-        class_new(gensym("ambi~"), (t_newmethod)ambi_new, (t_method)ambi_free,
-                  sizeof(ambi_tilde), CLASS_DEFAULT, A_GIMME, 0);
+    ambi_class = class_new(gensym("ambi~"), (t_newmethod)ambi_new,
+                           (t_method)ambi_free, sizeof(ambi_tilde),
+                           CLASS_DEFAULT | CLASS_MULTICHANNEL, A_GIMME, 0);
 
-    CLASS_MAINSIGNALIN(ambi, ambi_tilde, sample);
-    class_addmethod(ambi, (t_method)ambi_adddsp, gensym("dsp"), A_CANT, 0);
+    CLASS_MAINSIGNALIN(ambi_class, ambi_tilde, sample);
+    class_addmethod(ambi_class, (t_method)ambi_adddsp, gensym("dsp"), A_CANT,
+                    0);
 
     // speaker, chNumber, Azi, Ele, Dis
-    class_addmethod(ambi, (t_method)ambi_speakers, gensym("speaker"), A_FLOAT,
-                    A_FLOAT, A_FLOAT, A_FLOAT, 0);
-    class_addmethod(ambi, (t_method)ambi_set, gensym("set"), A_GIMME, 0);
+    class_addmethod(ambi_class, (t_method)ambi_set, gensym("set"), A_GIMME, 0);
 
     // source position
-    class_addmethod(ambi, (t_method)ambi_azi, gensym("azi"), A_FLOAT, 0);
-    class_addmethod(ambi, (t_method)ambi_ele, gensym("ele"), A_FLOAT, 0);
-    class_addmethod(ambi, (t_method)ambi_dis, gensym("dis"), A_FLOAT, 0);
+    class_addmethod(ambi_class, (t_method)ambi_azi, gensym("azi"), A_FLOAT, 0);
+    class_addmethod(ambi_class, (t_method)ambi_ele, gensym("ele"), A_FLOAT, 0);
+    class_addmethod(ambi_class, (t_method)ambi_dis, gensym("dis"), A_FLOAT, 0);
 }

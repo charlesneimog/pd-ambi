@@ -59,7 +59,7 @@ target_include_directories(
 
 target_include_directories(
   ambi_tilde PRIVATE "${CMAKE_BINARY_DIR}/Libraries/libmysofa/src/")
-set_target_properties(ambi_tilde PROPERTIES CXX_STANDARD 11)
+set_target_properties(ambi_tilde PROPERTIES CXX_STANDARD 17)
 target_link_libraries(ambi_tilde PRIVATE spatialaudio-static)
 
 # ╭──────────────────────────────────────╮
