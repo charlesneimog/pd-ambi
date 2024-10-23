@@ -39,7 +39,7 @@ set_target_properties(spatialaudio-static PROPERTIES POSITION_INDEPENDENT_CODE
 # ╭──────────────────────────────────────╮
 # │             Pd External              │
 # ╰──────────────────────────────────────╯
-file(GLOB EXTERNAL_SOURCES "${CMAKE_SOURCE_DIR}/Sources/*.cpp")
+file(GLOB EXTERNAL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/Sources/*.cpp")
 pd_add_external(ambi~ ${EXTERNAL_SOURCES} TARGET ambi_tilde)
 
 add_definitions(-DHAVE_MYSOFA)
@@ -58,7 +58,7 @@ target_include_directories(
     "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/libspatialaudio/source/kiss_fft/")
 
 target_include_directories(
-  ambi_tilde PRIVATE "${CMAKE_BINARY_DIR}/Libraries/libmysofa/src/")
+  ambi_tilde PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Libraries/libmysofa/src/")
 set_target_properties(ambi_tilde PROPERTIES CXX_STANDARD 17)
 target_link_libraries(ambi_tilde PRIVATE spatialaudio-static)
 

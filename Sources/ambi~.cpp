@@ -54,7 +54,7 @@ class ambi_tilde {
     // Binaural config
     bool binauralSet = false;
     CAmbisonicBinauralizer *Binauralizer;
-    std::string HrtfPath;
+    std::string hrtfPath;
     bool lowcpu;
 
     //
@@ -62,9 +62,9 @@ class ambi_tilde {
     t_sample **SpeakersSetup;
 
     bool DecoderConfigured = false;
-    bool Binaural = false;
+    bool binaural = false;
 
-    t_outlet **Outlets;
+    t_outlet **outlets;
 };
 
 // ─────────────────────────────────────
@@ -91,9 +91,9 @@ static void ambi_configure(ambi_tilde *x, int blockSize, int sampleRate) {
     }
 
     unsigned int DecoderSpeakers;
-    if (x->Binaural) {
+    if (x->binaural) {
         sucess = x->Binauralizer->Configure(1, true, sys_getsr(), blockSize,
-                                            x->tailLength, x->HrtfPath);
+                                            x->tailLength, x->hrtfPath);
         if (!sucess) {
             pd_error(x, "[ambi~]: Error configuring Binauralizer");
             return;
@@ -186,15 +186,15 @@ static void ambi_binauralconfig(ambi_tilde *x, t_symbol *s, int argc,
     if (argc == 2) {
         bool binaural = atom_getfloat(argv + 1);
         if (binaural) {
-            x->Binaural = true;
+            x->binaural = true;
             if (!x->binauralSet) {
                 x->Binauralizer->Configure(1, true, sys_getsr(), x->blockSize,
-                                           x->tailLength, x->HrtfPath);
+                                           x->tailLength, x->hrtfPath);
             }
             post("[ambi~]: Binaural on");
             x->binauralSet = true;
         } else {
-            x->Binaural = false;
+            x->binaural = false;
             post("[ambi~]: Binaural off");
         }
     }
@@ -209,7 +209,7 @@ static void ambi_binauralconfig(ambi_tilde *x, t_symbol *s, int argc,
             std::string file =
                 x->patchDir + "/" + atom_getsymbol(argv + 2)->s_name;
             if (fs::exists(file)) {
-                x->HrtfPath = file;
+                x->hrtfPath = file;
             } else {
                 pd_error(x, "[ambi~]: HRTF file not found");
                 return;
@@ -225,9 +225,9 @@ static void ambi_binauralconfig(ambi_tilde *x, t_symbol *s, int argc,
             }
         }
 
-        if (x->Binaural) {
+        if (x->binaural) {
             x->Binauralizer->Configure(1, true, sys_getsr(), x->blockSize,
-                                       x->tailLength, x->HrtfPath);
+                                       x->tailLength, x->hrtfPath);
         }
     }
 }
@@ -362,7 +362,7 @@ static void ambi_speakersconfig(ambi_tilde *x, t_symbol *s, int argc,
             pd_error(x, "[ambi~]: HRTF file path not provided");
             return;
         }
-        x->HrtfPath = atom_getsymbol(argv + 2)->s_name;
+        x->hrtfPath = atom_getsymbol(argv + 2)->s_name;
     }
     // set amount of speakers
     else if (method == "number") {
@@ -452,7 +452,7 @@ static t_int *ambi_perform(t_int *w) {
     x->Encoder->SetPosition(x->Position);
     x->Encoder->Process(in, n, x->BFormat);
 
-    if (x->Binaural) {
+    if (x->binaural) {
         x->Binauralizer->Process(x->BFormat, x->SpeakersArray);
     } else {
         x->Decoder->Process(x->BFormat, n, x->SpeakersArray);
@@ -539,27 +539,30 @@ static void *ambi_new(t_symbol *s, int argc, t_atom *argv) {
                 if (std == "-m") {
                     x->multichannel = true;
                 }
+                if (std == "-b") {
+                    x->binaural = true;
+                }
             }
         }
     }
 
     x->exterDir = ambi_class->c_externdir->s_name;
     x->patchDir = patchDir->s_name;
-    x->HrtfPath = x->exterDir + "/nh906.sofa";
+    x->hrtfPath = x->exterDir + "/nh906.sofa";
 
     // Check if the file exists
-    if (!fs::exists(x->HrtfPath)) {
+    if (!fs::exists(x->hrtfPath)) {
         pd_error(x, "[ambi~]: Default HRTF not file found: %s",
-                 x->HrtfPath.c_str());
+                 x->hrtfPath.c_str());
     }
 
     x->nChOut = atom_getfloat(argv);
-    x->Outlets = (t_outlet **)malloc(x->nChOut * sizeof(t_outlet *));
+    x->outlets = (t_outlet **)malloc(x->nChOut * sizeof(t_outlet *));
     if (x->multichannel) {
-        x->Outlets[0] = outlet_new(&x->xObj, &s_signal);
+        x->outlets[0] = outlet_new(&x->xObj, &s_signal);
     } else {
         for (int i = 0; i < x->nChOut; i++) {
-            x->Outlets[i] = outlet_new(&x->xObj, &s_signal);
+            x->outlets[i] = outlet_new(&x->xObj, &s_signal);
         }
     }
 
@@ -605,7 +608,7 @@ static void *ambi_free(ambi_tilde *x) {
         }
     }
 
-    free(x->Outlets);
+    free(x->outlets);
     return x;
 }
 
