@@ -13,7 +13,6 @@ jobs:
   macos-build:
     strategy:
       matrix:
-        arch: [amd64, arm64]
         precision: [32, 64]
         os: [macos-13, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -56,7 +55,7 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: mingw64
-          install: make mingw-w64-x86_64-gcc mingw64/mingw-w64-x86_64-cmake mingw64/mingw-w64-x86_64-cunit
+          install: make autoconf automake libtool mingw-w64-x86_64-gcc mingw64/mingw-w64-x86_64-cmake mingw64/mingw-w64-x86_64-cunit
           update: false
       # ──────────────────────────────────────
       - name: Install winget
@@ -72,7 +71,7 @@ jobs:
       - name: Configure and build Mingw
         shell: msys2 {0}
         run: |
-          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -PDLIBDIR=./
+          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DPDLIBDIR=./
           cmake --build build
           cmake --install build
       - name: Upload
@@ -96,6 +95,7 @@ jobs:
           sudo apt update
           sudo add-apt-repository ppa:pure-data/pure-data -y
           sudo apt install puredata -y
+          sudo apt install libcunit1 libcunit1-dev -y
       - name: Install aarch64 gcc
         if: matrix.arch == 'aarch64'
         run: |
