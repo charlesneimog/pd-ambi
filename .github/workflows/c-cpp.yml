@@ -32,7 +32,7 @@ jobs:
       - name: Upload Object
         uses: actions/upload-artifact@v4
         with:
-          name: ${{env.LIBNAME}}-${{matrix.os}}-${{matrix.arch}}-${{matrix.precision}}
+          name: ${{env.LIBNAME}}-${{matrix.os}}-${{matrix.precision}}
           path: ${{env.LIBNAME}}
   windows-build:
     runs-on: windows-latest
@@ -44,6 +44,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
       # ──────────────────────────────────────
       - if: matrix.compiler == 'msvc'
         name: Set up Visual Studio Build Tools
@@ -109,18 +112,21 @@ jobs:
       - name: Build Object
         if: matrix.arch == 'amd64'
         run: |
-          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }}
+          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DPDLIBDIR=./
           cmake --build build -- -j$(nproc)
+          cmake --install build
       - name: Build Object
         if: matrix.arch == 'aarch64'
         run: |
-          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=aarch64
+          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DPDLIBDIR=./
           cmake --build build -- -j$(nproc)
+          cmake --install build
       - name: Build Object
         if: matrix.arch == 'arm'
         run: |
-          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=arm
+          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=arm -DPDLIBDIR=./
           cmake --build build -- -j$(nproc)
+          cmake --install build
       - name: Upload Object
         uses: actions/upload-artifact@v4
         with:
@@ -147,10 +153,6 @@ jobs:
           --volume ${PWD}/package:/package \
           registry.git.iem.at/pd/deken \
           deken package /${{env.LIBNAME}} --output-dir /package -v ${{env.LIBVERSION}} -n ${{env.LIBNAME}}
-      - name: Clear Artifacts
-        uses: geekyeggo/delete-artifact@v5
-        with:
-          name: ${{ env.LIBNAME }}-*
       - name: Upload Deken
         uses: actions/upload-artifact@v4
         with:

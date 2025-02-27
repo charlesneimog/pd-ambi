@@ -8,9 +8,16 @@ set(PDCMAKE_DIR
 include(${PDCMAKE_DIR}/pd.cmake)
 
 # ╭──────────────────────────────────────╮
+# │           spatialaudioLib            │
+# ╰──────────────────────────────────────╯
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Libraries/libspatialaudio/
+                 EXCLUDE_FROM_ALL)
+set_target_properties(spatialaudio-static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(spatialaudio-static PROPERTIES CXX_STANDARD 17)
+
+# ╭──────────────────────────────────────╮
 # │               LibSofa                │
 # ╰──────────────────────────────────────╯
-
 cmake_policy(SET CMP0077 NEW)
 set(BUILD_TESTS OFF)
 option(BUILD_SHARED_LIBS "Build shared library" OFF)
@@ -25,16 +32,6 @@ set(MYSOFA_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/libmysofa/src/hrtf")
 set(MYSOFA_LIBRARIES mysofa-static)
 include_directories(${MYSOFA_INCLUDE_DIRS})
-
-# ╭──────────────────────────────────────╮
-# │           spatialaudioLib            │
-# ╰──────────────────────────────────────╯
-set(BUILD_SHARED_LIBS OFF)
-set(MYSOFA_FOUND ON)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Libraries/libspatialaudio
-                 EXCLUDE_FROM_ALL)
-set_target_properties(spatialaudio-static PROPERTIES POSITION_INDEPENDENT_CODE
-                                                     ON)
 
 # ╭──────────────────────────────────────╮
 # │             Pd External              │
