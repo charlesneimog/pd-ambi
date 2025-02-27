@@ -119,18 +119,18 @@ static void ambi_configure(ambi_tilde *x, int blockSize, int sampleRate) {
         for (int i = 0; i < x->nChOut; i++) {
             delete[] x->SpeakersSetup[i];
         }
-        x->SpeakersSetup = new float *[x->nChOut];
+        x->SpeakersSetup = new t_sample *[x->nChOut];
         for (int i = 0; i < x->nChOut; i++) {
-            x->SpeakersSetup[i] = new float[2];
+            x->SpeakersSetup[i] = new t_sample[2];
             x->SpeakersSetup[i][0] = i;
             x->SpeakersSetup[i][1] = 0;
         }
     }
     printf("position ok\n");
 
-    x->SpeakersArray = new float *[DecoderSpeakers];
+    x->SpeakersArray = new t_sample *[DecoderSpeakers];
     for (int niSpeaker = 0; niSpeaker < DecoderSpeakers; niSpeaker++) {
-        x->SpeakersArray[niSpeaker] = new float[blockSize];
+        x->SpeakersArray[niSpeaker] = new t_sample[blockSize];
     }
     x->DecoderConfigured = true;
     printf("ok\n");
@@ -450,12 +450,12 @@ static t_int *ambi_perform(t_int *w) {
 
     unsigned int DecoderSpeakers = x->Decoder->GetSpeakerCount();
     x->Encoder->SetPosition(x->Position);
-    x->Encoder->Process(in, n, x->BFormat);
+    x->Encoder->Process((float *)in, n, x->BFormat);
 
     if (x->binaural) {
-        x->Binauralizer->Process(x->BFormat, x->SpeakersArray);
+        x->Binauralizer->Process(x->BFormat, (float **)x->SpeakersArray);
     } else {
-        x->Decoder->Process(x->BFormat, n, x->SpeakersArray);
+        x->Decoder->Process(x->BFormat, n, (float **)x->SpeakersArray);
     }
 
     if (x->multichannel) {
@@ -571,9 +571,9 @@ static void *ambi_new(t_symbol *s, int argc, t_atom *argv) {
     }
 
     if (x->NeedSpeakersPosition) {
-        x->SpeakersSetup = new float *[x->nChOut];
+        x->SpeakersSetup = new t_sample *[x->nChOut];
         for (int i = 0; i < x->nChOut; i++) {
-            x->SpeakersSetup[i] = new float[2];
+            x->SpeakersSetup[i] = new t_sample[2];
             x->SpeakersSetup[i][0] = i;
             x->SpeakersSetup[i][1] = 0;
         }

@@ -44,6 +44,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
       # ──────────────────────────────────────
       - if: matrix.compiler == 'msvc'
         name: Set up Visual Studio Build Tools
@@ -109,18 +112,21 @@ jobs:
       - name: Build Object
         if: matrix.arch == 'amd64'
         run: |
-          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }}
+          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DPDLIBDIR=./
           cmake --build build -- -j$(nproc)
+          cmake --install build
       - name: Build Object
         if: matrix.arch == 'aarch64'
         run: |
-          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=aarch64
+          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DPDLIBDIR=./
           cmake --build build -- -j$(nproc)
+          cmake --install build
       - name: Build Object
         if: matrix.arch == 'arm'
         run: |
-          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=arm
+          cmake . -B build -DPD_FLOATSIZE=${{ matrix.precision }} -DCMAKE_SYSTEM_PROCESSOR=arm -DPDLIBDIR=./
           cmake --build build -- -j$(nproc)
+          cmake --install build
       - name: Upload Object
         uses: actions/upload-artifact@v4
         with:
