@@ -140,14 +140,13 @@ jobs:
         run: rm -f artifacts/*.pdb
         # ──────────────────────────────────────
       - name: Install Deken
-        continue-on-error: true
         run: |
           mkdir -p ${PWD}/package
           docker run --rm --user $(id -u) \
-          --volume ${PWD}/artifacts:/artifacts \
+          --volume ${PWD}/artifacts:/${{env.LIBNAME}} \
           --volume ${PWD}/package:/package \
           registry.git.iem.at/pd/deken \
-          deken package /artifacts --output-dir /package -v ${{env.LIBVERSION}} -n ${{env.LIBNAME}}
+          deken package /${{env.LIBNAME}} --output-dir /package -v ${{env.LIBVERSION}} -n ${{env.LIBNAME}}
       - name: Clear Artifacts
         uses: geekyeggo/delete-artifact@v5
         with:
