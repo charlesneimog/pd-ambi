@@ -2,10 +2,12 @@ cmake_minimum_required(VERSION 3.15)
 
 project(ambi~)
 
-set(PDCMAKE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/pd.cmake/"
-    CACHE PATH "Path to pd.cmake")
-include(${PDCMAKE_DIR}/pd.cmake)
+set(PDCMAKE_FILE ${CMAKE_BINARY_DIR}/pd.cmake)
+set(PDCMAKE_VERSION "v0.2.9")
+if(NOT EXISTS "${PDCMAKE_FILE}")
+    file(DOWNLOAD https://raw.githubusercontent.com/pure-data/pd.cmake/refs/tags/${PDCMAKE_VERSION}/pd.cmake ${PDCMAKE_FILE})
+endif()
+include(${PDCMAKE_FILE})
 
 # ╭──────────────────────────────────────╮
 # │           spatialaudioLib            │
@@ -62,6 +64,6 @@ target_link_libraries(ambi_tilde PRIVATE spatialaudio-static)
 # ╭──────────────────────────────────────╮
 # │              Data Files              │
 # ╰──────────────────────────────────────╯
-pd_add_datafile(ambi_tilde
+pd_add_datafile(ambi~
                 "${CMAKE_CURRENT_SOURCE_DIR}/Resources/ambi~-help.pd")
 pd_add_datafile(ambi_tilde "${CMAKE_CURRENT_SOURCE_DIR}/Resources/nh906.sofa")
